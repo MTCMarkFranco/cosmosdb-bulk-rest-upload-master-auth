@@ -111,15 +111,12 @@ When performing bulk uploads, ensure that the partition key in your data matches
 
 ### Setting Partition Key in Code
 
-In the bulk upload logic, you specify the partition key when creating items:
+In the bulk upload logic, you specify the partition key in the header when creating items:
 
 ```csharp
-// ...existing code...
-foreach (var item in items)
-{
-    await container.CreateItemAsync(item, new PartitionKey(item.PartitionKey));
-}
-// ...existing code...
+
+client.DefaultRequestHeaders.Add("x-ms-documentdb-partitionkey", JsonConvert.SerializeObject(new[] { partionKey }));
+
 ```
 
 ## Unique ID Requirement
