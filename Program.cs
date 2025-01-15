@@ -1,64 +1,101 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Net.Http;
-using System.Security.Cryptography;
-using System.Text;
-using System.Threading.Tasks;
-using System.Web;
-using Azure.Core;
-using Azure.Identity;
+﻿using System.ComponentModel;
+using System.Net;
+using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json;
 
 class Program
 {
-    private static readonly string uri = "";
-    private static readonly string database = "";
-    private static readonly string container = "";
-
-    private static readonly string primaryKey = "";
-
     static async Task Main(string[] args)
     {
-        var documents = new List<Dictionary<string, string>>
-        {
-            new Dictionary<string, string> { { "id", "10" }, { "customerField2", "Field Data 2" } },
-            new Dictionary<string, string> { { "id", "11" }, { "customerField2", "Field Data 2" } } 
-        };
+        
+        IConfiguration Configuration;
+        var client = new HttpClient();
 
+        var builder = new ConfigurationBuilder()
+            .AddUserSecrets<Program>();
+        Configuration = builder.Build();
+    
+        // Initializing global vars
+        string uri = Configuration["CosmosDb:Uri"] ?? throw new ArgumentNullException("CosmosDb:Uri");
+        string database = Configuration["CosmosDb:Database"] ?? throw new ArgumentNullException("CosmosDb:Database");
+        string container = Configuration["CosmosDb:Container"] ?? throw new ArgumentNullException("CosmosDb:Container");
+        string primaryKey = Configuration["CosmosDb:PrimaryKey"] ?? throw new ArgumentNullException("CosmosDb:PrimaryKey");
         string date = DateTime.UtcNow.ToString("R");
         string resourceLink = $"dbs/{database}/colls/{container}";
-       
-        var client = new HttpClient();
+        string partionKey = "part1";
         
-        // Generate master type token
-        string authToken = GenerateMasterToken("post", "docs", resourceLink, date, primaryKey);
+        
+        // Generate key-based Authentication token
+        string keyAuthToken = GenerateMasterKeyAuthorizationSignature(HttpMethod.Post, "docs", resourceLink, date, primaryKey);
 
-        // URL-encode the token
-        string encodedAuthToken = HttpUtility.UrlEncode(authToken);
+        // Sample Data records
+        var documents = new List<Dictionary<string, string>>
+        {
+            new Dictionary<string, string> { { "partition", partionKey }, { "id", Guid.NewGuid().ToString() }, { "customerField2", "Field Data " } },
+            new Dictionary<string, string> { { "partition", partionKey }, { "id", Guid.NewGuid().ToString() }, { "customerField2", "Field Data" } },
+            new Dictionary<string, string> { { "partition", partionKey }, { "id", Guid.NewGuid().ToString() }, { "customerField2", "Field Data" } },
+            new Dictionary<string, string> { { "partition", partionKey }, { "id", Guid.NewGuid().ToString() }, { "customerField2", "Field Data" } }
+        };
         
-         client.DefaultRequestHeaders.Clear();
+        // Create http Headers for the /docs endpoint        
+        client.DefaultRequestHeaders.Clear();
         client.DefaultRequestHeaders.Add("Accept", "application/json");
-        client.DefaultRequestHeaders.Add("Authorization", encodedAuthToken);
+        client.DefaultRequestHeaders.Add("authorization", keyAuthToken);
         client.DefaultRequestHeaders.Add("x-ms-date", date);
-        client.DefaultRequestHeaders.Add("x-ms-version", "2015-12-16");
-        client.DefaultRequestHeaders.Add("x-ms-documentdb-partitionkey", "id");
-        
+        client.DefaultRequestHeaders.Add("x-ms-version", "2018-12-31");
+        client.DefaultRequestHeaders.Add("x-ms-documentdb-partitionkey", JsonConvert.SerializeObject(new[] { partionKey }));
 
+        // Initialize Threading
+        var tasks = new List<Task>();
+        var semaphore = new SemaphoreSlim(4); // Limit to 4 concurrent threads
+                
+        // Loop through all Records and Post to CosmosDB using Semaphore
         foreach (var doc in documents)
         {
-            var content = new StringContent(Newtonsoft.Json.JsonConvert.SerializeObject(doc), Encoding.UTF8, "application/json");
-            var response = await client.PostAsync($"{uri}{resourceLink}/docs", content);
-            Console.WriteLine($"{response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+            await semaphore.WaitAsync();
+            tasks.Add(Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(new Random().Next(0, 100)); // add some entropy to simulate network latency
+                    var content = Newtonsoft.Json.JsonConvert.SerializeObject(doc);
+                    var response = await client.PostAsync($"{uri}{resourceLink}/docs", new StringContent(content));
+                    response.EnsureSuccessStatusCode();
+                    Console.WriteLine($"{response.StatusCode} {await response.Content.ReadAsStringAsync()}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Exception occurred: {ex.Message}");
+                    Console.WriteLine($"Stack Trace: {ex.StackTrace}");
+                    if (ex.InnerException != null)
+                    {
+                        Console.WriteLine($"Inner Exception: {ex.InnerException.Message}");
+                        Console.WriteLine($"Inner Exception Stack Trace: {ex.InnerException.StackTrace}");
+                    }
+                }
+                finally
+                {
+                    semaphore.Release();
+                }
+            }));
         }
+        await Task.WhenAll(tasks);
+        Console.WriteLine("All tasks have completed!");
+    
     }
 
-    private static string GenerateMasterToken(string verb, string resourceType, string resourceLink, string date, string key)
+    private static string GenerateMasterKeyAuthorizationSignature(HttpMethod verb, string resourceType, string resourceLink, string date, string key)
     {
-        var keyBytes = Convert.FromBase64String(key);
-        string text = $"{verb.ToLowerInvariant()}\n{resourceType.ToLowerInvariant()}\n{resourceLink}\n{date.ToLowerInvariant()}\n\n";
-        var hmacSha256 = new HMACSHA256(keyBytes);
-        var hashPayload = hmacSha256.ComputeHash(Encoding.UTF8.GetBytes(text));
-        string signature = Convert.ToBase64String(hashPayload);
-        return $"type=master&ver=1.0&sig={signature}";
+        var keyType = "master";
+        var tokenVersion = "1.0";
+        var payload = $"{verb.ToString().ToLowerInvariant()}\n{resourceType.ToLowerInvariant()}\n{resourceLink}\n{date.ToLowerInvariant()}\n\n";
+
+        var hmacSha256 = new System.Security.Cryptography.HMACSHA256 { Key = Convert.FromBase64String(key) };
+        var hashPayload = hmacSha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(payload));
+        var signature = Convert.ToBase64String(hashPayload);
+        var authSet = WebUtility.UrlEncode($"type={keyType}&ver={tokenVersion}&sig={signature}");
+
+        return authSet;
     }
 
 }
