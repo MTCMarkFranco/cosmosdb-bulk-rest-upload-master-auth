@@ -76,10 +76,10 @@ dotnet user-secrets init
 Use the following command to add user secrets by name:
 
 ```sh
-dotnet user-secrets set "CosmosDB:Endpoint" "<your-cosmosdb-endpoint>"
-dotnet user-secrets set "CosmosDB:Key" "<your-cosmosdb-key>"
-dotnet user-secrets set "CosmosDB:DatabaseId" "<your-cosmosdb-database-id>"
-dotnet user-secrets set "CosmosDB:ContainerId" "<your-cosmosdb-container-id>"
+dotnet user-secrets set "CosmosDb:Uri" "<your-cosmosdb-endpoint>"
+dotnet user-secrets set "CosmosDb:PrimaryKey" "<your-cosmosdb-key>"
+dotnet user-secrets set "CosmosDb:Database" "<your-cosmosdb-database-id>"
+dotnet user-secrets set "CosmosDb:Container" "<your-cosmosdb-container-id>"
 ```
 
 These secrets will be stored in a secure location on your machine and can be accessed in the code as shown in the `Program.cs` file.
